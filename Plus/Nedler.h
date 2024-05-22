@@ -6,80 +6,86 @@
 #include "FuncInterface.h"
 
 namespace OptLib {
-	namespace ConcreteState {
-		class StateBisection :public StateSegment
-		{
-		public:
-			SetOfPoints<5, PointVal<1>> AuxPoints;
+    namespace ConcreteState {
+        class StateBisection : public StateSegment {
+        public:
+            SetOfPoints<5, PointVal<1>> AuxPoints;
 
-			StateBisection(SetOfPoints<2, Point<1>>&& state, FuncInterface::IFunc<1>* f) :StateSegment{ move(state), f };
-			AuxPoints[0] = this->GuessDomain().Points[0];
-			AuxPoints[4] = this->GuessDomain().Points[1];
+            StateBisection(SetOfPoints<2, Point<1>>&& state, FuncInterface::IFunc<1>* f)
+                : StateSegment{ std::move(state), f } {
+                AuxPoints[0] = this->GuessDomain().Points()[0];
+                AuxPoints[4] = this->GuessDomain().Points()[1];
 
-			double step = (AuxPoints[4].P[0] - AuxPoints[0].P[0]) / 4.0;
+                double step = (AuxPoints[4].P[0] - AuxPoints[0].P[0]) / 4.0;
 
-			for (size_t i = 1; i < 4; ++i) {
-				Point<1> x{ AuxPoints[i - 1].P[0] + step };
-				AuxPoints[i] = PointVal{ x, (*f).(x) };
-			}
-		};
-	}
-	namespace ConcreteOptimizer {
-		class Bisection {
-		public:
-			static PointVal<1> Procced(ConcreteState::StateBisection& State, const interface::IFunc<1>* f) {
-				SetOfPoints<5, PointVal<1>>& AuxPoints = State.AuxPoints;
-				SetOfPoints<5, PointVal<1>>::iterator min = min_element(AuxPoint.begin(), AuxPoints.end());
-				size_t pos = std::distance(AuxPoints.begin(), min);
+                for (size_t i = 1; i < 4; ++i) {
+                    Point<1> x{ AuxPoints[i - 1].P[0] + step };
+                    AuxPoints[i] = PointVal<1>{ x, (*f)(x) };
+                }
+            }
+        };
+        template<size_t dim>
+        class StateNelderMead : public FuncInterface::IStateSimplex<dim, SimplexValSort<dim>> {
+        public:
+            StateNelderMead(const SimplexValSort<dim>& simplex) : FuncInterface::IStateSimplex<dim, SimplexValSort<dim>>(simplex) {}
+        };
 
-				if (pos == 0) {
-					AuxPoints[4] = AuxPoints[1];
-					temp2(State, f);
-				}
-				else if (pos == 1) {
-					AuxPoints[4] = AuxPoints[2];
-					AuxPoints[2] = AuxPoints[1];
-					AuxPoints[0] = AuxPoints[0];
-					temp1(State, f);
-				}
-				else if (pos == 2) {
-					AuxPoitns[0] = AuxPoint[1];
-					AuxPoints[2] = AuxPoint[2];
-					AuxPoints[4] = AuxPoints[3];
-					temp1(State, f);
-				}
-				else {
-					AuxPoints[0] = AuxPoints[2];
-					AuxPoints[2] = AuxPoints[3];
-					AuxPoints[4] = AuxPoints[4];
-					temp1(State, f);
-				}
-				State.SetDomain({ AuxPoints[0], AuxPoints[4] });
-				return State.Guess();
-			}
-		};
-	}
-	namespace FuncWithCounter {
-		template <size_t dim>
-		class ICounterFunc :public IFunc {
-			FuncInterface::IFunc<cim>* f;
-		public:
-			ICounterFunc(IFunc<dim>* f) : f{ f } {}
-			double operator()(const Point<dim>& x) const override {
-				const_cast<ICounterFunc*>(this)->Counter += 1;
-				return (*f)(x);
+    }
 
-			}
-			size_t Counter{ 0 };
-		};
-		main() 
-		{
-			IFunc* f = new Parabola();
-			ICounterFunc* g = new ICounterFunc{ f };
-			auto y = g(2.0);
-		}
+    namespace ConcreteOptimizer {
+        class NelderMead {
+        public:
+            template<size_t dim>
+            static PointVal<dim> Proceed(ConcreteState::StateNelderMead<dim>& state, const FuncInterface::IFunc<dim>* f) {
+                auto& simplex = state.GuessDomain();
 
+                // Sort points by function value
+                std::sort(simplex.begin(), simplex.end());
 
+                // Compute the centroid of the best points (excluding the worst point)
+                Point<dim> centroid{};
+                for (size_t i = 0; i < dim; ++i) {
+                    centroid = centroid + simplex[i].P;
+                }
+                centroid = centroid / dim;
 
-	}	
+                // Reflection
+                Point<dim> xr = centroid + (centroid - simplex[dim].P);
+                double fr = (*f)(xr);
+                if (simplex[0].Val <= fr && fr < simplex[dim - 1].Val) {
+                    simplex[dim] = PointVal<dim>{ xr, fr };
+                    return state.Guess();
+                }
+
+                // Expansion
+                if (fr < simplex[0].Val) {
+                    Point<dim> xe = centroid + 2.0 * (centroid - simplex[dim].P);
+                    double fe = (*f)(xe);
+                    if (fe < fr) {
+                        simplex[dim] = PointVal<dim>{ xe, fe };
+                    }
+                    else {
+                        simplex[dim] = PointVal<dim>{ xr, fr };
+                    }
+                    return state.Guess();
+                }
+
+                // Contraction
+                Point<dim> xc = centroid + 0.5 * (simplex[dim].P - centroid);
+                double fc = (*f)(xc);
+                if (fc < simplex[dim].Val) {
+                    simplex[dim] = PointVal<dim>{ xc, fc };
+                    return state.Guess();
+                }
+
+                // Reduction
+                for (size_t i = 1; i <= dim; ++i) {
+                    simplex[i].P = simplex[0].P + 0.5 * (simplex[i].P - simplex[0].P);
+                    simplex[i].Val = (*f)(simplex[i].P);
+                }
+
+                return state.Guess();
+            }
+        };
+    }
 }
